@@ -29,6 +29,15 @@ use Cwd;
 ## modified on 15 01 2022 to add Illumina directional mRNA kit adapter (ACTGTCTCTTATACACATCT)
 ## modified on 12 Aug 2022 to allow --max_n to be a fraction
 
+
+sub run_cutadapt{
+	my (@cmd_args) = @_;
+    # get a random filename for the error file using a timestamp and a random number
+    my $error_tmp_file = "cutadapt_error_" . time() . "_" . int(rand(1000000)) . ".log";
+	my $cutadapt_cmd = "@cmd_args 2> $error_tmp_file";
+	return ($cutadapt_cmd,$error_tmp_file);
+}
+
 my $DOWARN = 1; # print on screen warning and text by default
 BEGIN { $SIG{'__WARN__'} = sub { warn $_[0] if $DOWARN } };
 
@@ -920,7 +929,7 @@ sub trim{
 	my $CAA = 0;
 	my $CGA = 0;
   
-	my $pid;
+	my ($cutadapt_cmd,$trim_FH,$error_tmp_file);
   
 	if ($rrbs and $cutoff != 0){
      
@@ -930,22 +939,20 @@ sub trim{
 			if ( scalar(@filenames)%2 == 0){ # this is read 1 of a pair
 				warn "\n  >>> Now performing adapter trimming for the adapter sequence: '$adapter' from file $temp <<< \n";
 				#sleep (1);
-				$pid = open3 (\*WRITER, \*TRIM, \*ERROR,"$path_to_cutadapt  $cores -e $error_rate -O $stringency -a $adapter $output_dir$temp") or die "Failed to launch Cutadapt: $!\n";
+				($cutadapt_cmd,$error_tmp_file)=run_cutadapt("$path_to_cutadapt  $cores -e $error_rate -O $stringency -a $adapter $output_dir$temp") or die "Failed to launch Cutadapt: $!\n";
 			}
 			else{                            # this is read 2 of a pair
 				warn "\n  >>> Now performing adapter trimming for the adapter sequence: '$a2' from file $temp <<< \n";
 				#sleep (1);
-				$pid = open3 (\*WRITER, \*TRIM, \*ERROR,"$path_to_cutadapt  $cores -e $error_rate -O $stringency -a $a2 $output_dir$temp") or die "Failed to launch Cutadapt: $!\n";
+                ($cutadapt_cmd,$error_tmp_file)=run_cutadapt("$path_to_cutadapt  $cores -e $error_rate -O $stringency -a $a2 $output_dir$temp") or die "Failed to launch Cutadapt: $!\n";
 			}
 		}
 		### Using the same adapter for both read 1 and read 2
 		else{
 			warn "\n  >>> Now performing adapter trimming for the adapter sequence: '$adapter' from file $temp <<< \n";
 			# sleep (3);
-			$pid = open3 (\*WRITER, \*TRIM, \*ERROR,"$path_to_cutadapt  $cores -e $error_rate -O $stringency -a $adapter $output_dir$temp") or die "Failed to launch Cutadapt: $!\n";
+			($cutadapt_cmd,$error_tmp_file)=run_cutadapt("$path_to_cutadapt  $cores -e $error_rate -O $stringency -a $adapter $output_dir$temp") or die "Failed to launch Cutadapt: $!\n";
 		}
-      
-		close WRITER or die $!; # not needed
       
 		open (QUAL,"$output_dir$temp") or die $!; # quality trimmed file
       
@@ -955,11 +962,10 @@ sub trim{
 		else{
 			open (IN,$filename) or die $!; # original, untrimmed file
 		}
-      
-		while (1){
-	  
+        open (TRIM,"$cutadapt_cmd |") or die "Failed to launch Cutadapt: $!\n";
+		while (defined(my $line = <TRIM>)){
 			# we can process the output from Cutadapt and the original input 1 by 1 to decide if the adapter has been removed or not
-			my $l1 = <TRIM>;
+			my $l1 = $line;
 			my $seq = <TRIM>; # adapter trimmed sequence
 			my $l3 = <TRIM>;
 			my $qual = <TRIM>;
@@ -1113,16 +1119,27 @@ sub trim{
 			}
 		}
       
-		print REPORT "\n";
-		while (<ERROR>){
-			warn $_;
-			print REPORT $_;
-		}
+
 		
 		close IN or die "Unable to close IN filehandle: $!";
 		close QUAL or die "Unable to close QUAL filehandle: $!";
 		close TRIM or die "Unable to close TRIM filehandle: $!";
 		close OUT or die  "Unable to close OUT filehandle: $!";
+        print REPORT "\n";
+        #check that the error tmp file exists and is not empty
+        if (defined $error_tmp_file && -e $error_tmp_file && -s $error_tmp_file){
+            open (ERROR,"$error_tmp_file") or die "Unable to open error file: $!\n";
+            while (<ERROR>){
+                warn $_;
+                print REPORT $_;
+            }
+            #delete the error tmp file
+            unlink $error_tmp_file;
+        }
+        #delete if empty
+        if (-e $error_tmp_file && -s $error_tmp_file == 0){
+            unlink $error_tmp_file;
+        }
       
 	}
     ############################################################################################################
@@ -1140,20 +1157,20 @@ sub trim{
 			### Figure out whether current file counts as read 1 or read 2 of paired-end files
 			if ( scalar(@filenames)%2 == 0){ # this is read 1 of a pair
 				warn "\n  >>> Now performing Poly-A trimming for the adapter sequence: '$adapter' from file $temp <<< \n";
-				$pid = open3 (\*WRITER, \*TRIM, \*ERROR,"$path_to_cutadapt  $cores -e $error_rate -O $stringency -a $adapter $output_dir$temp") or die "Failed to launch Cutadapt: $!\n";
+				($cutadapt_cmd,$error_tmp_file)=run_cutadapt("$path_to_cutadapt  $cores -e $error_rate -O $stringency -a $adapter $output_dir$temp") or die "Failed to launch Cutadapt: $!\n";
 			}
 			else{                            # this is read 2 of a pair
 				$isR2 = 1;
 				warn "\n  >>> Now performing Poly-A trimming for the adapter sequence: '$a2' from file $temp <<< \n";	
 				# For Read 2 we need to trim the PolyT (or PolyA) from the 5' end instead! Hence -g $a2 and not -a! 
-				$pid = open3 (\*WRITER, \*TRIM, \*ERROR,"$path_to_cutadapt  $cores -e $error_rate -O $stringency -g $a2 $output_dir$temp") or die "Failed to launch Cutadapt: $!\n";
+				($cutadapt_cmd,$error_tmp_file)=run_cutadapt("$path_to_cutadapt  $cores -e $error_rate -O $stringency -g $a2 $output_dir$temp") or die "Failed to launch Cutadapt: $!\n";
 			}
 		}
 		### Using the same adapter for both read 1 and read 2 - Single end will use the same adapters are Read 1s for paired-end files
 		else{
 			warn "\n  >>> Now performing single-end Poly-A trimming for with the sequence: '$adapter' from file $temp <<< \n";
 			# sleep (3);
-			$pid = open3 (\*WRITER, \*TRIM, \*ERROR,"$path_to_cutadapt  $cores -e $error_rate -O $stringency -a $adapter $output_dir$temp") or die "Failed to launch Cutadapt: $!\n";
+			($cutadapt_cmd,$error_tmp_file)=run_cutadapt("$path_to_cutadapt  $cores -e $error_rate -O $stringency -a $adapter $output_dir$temp") or die "Failed to launch Cutadapt: $!\n";
 		}
 		
 		close WRITER or die $!; # not needed
@@ -1165,10 +1182,10 @@ sub trim{
 		else{
 			open (QUAL,"$output_dir$temp") or die $!; # quality trimmed file
 		}
-	  
-		while(1){
+		open (TRIM,"$cutadapt_cmd |") or die "Failed to launch Cutadapt: $!\n";
+		while(defined(my $line = <TRIM>)){
 			# we can process the output from Cutadapt and the original input 1 by 1 to decide if the adapter has been removed or not
-			my $l1 = <TRIM>;
+			my $l1 = $line;
 			my $seq = <TRIM>; # adapter trimmed sequence
 			my $l3 = <TRIM>;
 			my $qual = <TRIM>;
@@ -1253,16 +1270,26 @@ sub trim{
 				}
 			}
 		}
-	
-		print REPORT "\n";
-		while (<ERROR>){
-			warn $_;
-			print REPORT $_;
-		}
-	
 		close QUAL or die "Unable to close QUAL filehandle: $!";
 		close TRIM or die "Unable to close TRIM filehandle: $!";
 		close OUT or die  "Unable to close OUT filehandle: $!";
+		
+        print REPORT "\n";
+        if (defined $error_tmp_file && -e $error_tmp_file && -s $error_tmp_file){
+            open (ERROR,"$error_tmp_file") or die "Unable to open error file: $!\n";
+            while (<ERROR>){
+                warn $_;
+                print REPORT $_;
+            }
+            #delete the error tmp file
+            unlink $error_tmp_file;
+        }
+        #delete if empty
+        if (-e $error_tmp_file && -s $error_tmp_file == 0){
+            unlink $error_tmp_file;
+        }
+	
+
     }
     
     ############################################################################################################  
@@ -1286,26 +1313,25 @@ sub trim{
 			if ( scalar(@filenames)%2 == 0){ # this is read 1 of a pair
 				warn "\n  >>> Now performing quality (cutoff '$quality_cutoff') and adapter trimming in a single pass for the adapter sequence: '$adapter' from file $filename <<< \n";
 				#sleep (1);
-				$pid = open3 (\*WRITER, \*TRIM, \*ERROR, "$path_to_cutadapt  $cores -e $error_rate $quality_cutoff -O $stringency $trim_n -a $adapter $filename") or die "Failed to launch Cutadapt: $!";
+				($cutadapt_cmd,$error_tmp_file)=run_cutadapt("$path_to_cutadapt  $cores -e $error_rate $quality_cutoff -O $stringency $trim_n -a $adapter $filename") or die "Failed to launch Cutadapt: $!";
 			}
 			else{                            # this is read 2 of a pair
 				warn "\n  >>> Now performing quality (cutoff '$quality_cutoff') and adapter trimming in a single pass for the adapter sequence: '$a2' from file $filename <<< \n";
 				#sleep (1);
-				$pid = open3 (\*WRITER, \*TRIM, \*ERROR, "$path_to_cutadapt  $cores -e $error_rate $quality_cutoff -O $stringency $trim_n -a $a2 $filename") or die "Failed to launch Cutadapt: $!";
+				($cutadapt_cmd,$error_tmp_file)=run_cutadapt("$path_to_cutadapt  $cores -e $error_rate $quality_cutoff -O $stringency $trim_n -a $a2 $filename") or die "Failed to launch Cutadapt: $!";
 			}
 		}
 		### Using the same adapter for both read 1 and read 2
 		else{
 			warn "\n  >>> Now performing quality (cutoff '$quality_cutoff') and adapter trimming in a single pass for the adapter sequence: '$adapter' from file $filename <<< \n";
 			#sleep (1);
-			$pid = open3 (\*WRITER, \*TRIM, \*ERROR, "$path_to_cutadapt  $cores -e $error_rate $quality_cutoff -O $stringency $trim_n -a $adapter $filename") or die "Failed to launch Cutadapt: $!";
+			($cutadapt_cmd,$error_tmp_file)=run_cutadapt("$path_to_cutadapt  $cores -e $error_rate $quality_cutoff -O $stringency $trim_n -a $adapter $filename") or die "Failed to launch Cutadapt: $!";
 		}
       
-		close WRITER or die $!; # not needed
-    
-		while (1){
+		open (TRIM,"$cutadapt_cmd |") or die "Failed to launch Cutadapt: $!\n";
+		while(defined(my $line = <TRIM>)){
 	  
-			my $l1 = <TRIM>;
+			my $l1 = $line;
 			my $seq = <TRIM>; # quality and/or adapter trimmed sequence
 			my $l3 = <TRIM>;
 			my $qual = <TRIM>;
@@ -1378,16 +1404,22 @@ sub trim{
 			}
 		}
       
-		print REPORT "\n";
-		while (<ERROR>){
-			warn $_;
-			print REPORT $_;
-		}	
-      
 		close TRIM or die "Unable to close TRIM filehandle: $!\n";
-		close ERROR or die "Unable to close ERROR filehandle: $!\n";
 		close OUT or die  "Unable to close OUT filehandle: $!\n";
-      
+        print REPORT "\n";
+        if (defined $error_tmp_file && -e $error_tmp_file && -s $error_tmp_file){
+            open (ERROR,"$error_tmp_file") or die "Unable to open error file: $!\n";
+            while (<ERROR>){
+                warn $_;
+                print REPORT $_;
+            }
+            #delete the error tmp file
+            unlink $error_tmp_file;
+        }
+        #delete if empty
+        if (-e $error_tmp_file && -s $error_tmp_file == 0){
+            unlink $error_tmp_file;
+        }
 	}
   
   
@@ -1404,12 +1436,6 @@ sub trim{
 				warn "Could not delete temporary file $temp";
 			}
 		}
-	}
-  
-	### Wait and reap the child process (Cutadapt) so that it doesn't become a zombie process
-	waitpid $pid, 0;
-	unless ($? == 0){
-		die "\n\nCutadapt terminated with exit signal: '$?'.\nTerminating Trim Galore run, please check error message(s) to get an idea what went wrong...\n\n";
 	}
   
 	warn "\nRUN STATISTICS FOR INPUT FILE: $filename\n";
