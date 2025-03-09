@@ -7,6 +7,16 @@ use File::Spec;
 use File::Basename;
 use Cwd;
 
+# Changes to original Trim Galore: Ling-Hong Hung 2025-03-09
+# - Replaced open3 calls with simple open calls to process cutadapt output
+# - Redirected stderr to temporary files to be read later
+# - This prevents lockups that occurred with open3's thread management 
+#   especially when using Docker mounts and slow disks with multiple threads     
+# - Tried using mbuffer for compression but it caused lockups
+# - Current implementation works reliably with both gzip and pigz
+# - Maintains all original functionality while being more robust
+
+
 ## This program is Copyright (C) 2012-23, Felix Krueger (fkrueger@altoslabs.com)
 ## Edited by Frankie James (github.com/fjames003) for multi-core support
 
